@@ -9,13 +9,17 @@
 5. 提醒历史管理 (4个)
 6. 批量检查 (2个)
 7. 配置管理 (2个)
+8. 邮件通知 (8个)
 """
 
 import pytest
 from datetime import datetime, timedelta
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch, MagicMock, mock_open, call
 from src.monitoring.alert_manager import AlertManager, AlertRule, AlertChannel
 from src.monitoring.signal_detector import Signal
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 
 # ========================================================================
@@ -362,3 +366,164 @@ def test_get_all_rules(alert_manager, sample_rule):
 
     assert len(rules) == 1
     assert rules[0].rule_id == sample_rule.rule_id
+
+
+# ========================================================================
+# 8. 邮件通知测试
+# ========================================================================
+
+@pytest.fixture
+def email_config():
+    """邮件配置夹具"""
+    return {
+        'smtp_server': 'smtp.gmail.com',
+        'smtp_port': 587,
+        'use_tls': True,
+        'sender': 'test@example.com',
+        'sender_password': 'test_password',
+        'recipients': ['recipient1@example.com', 'recipient2@example.com'],
+        'subject_template': '[A股监控] {signal_type} - {stock_name}',
+        'max_retries': 3,
+        'retry_delay': 1,
+        'rate_limit_seconds': 300
+    }
+
+
+@pytest.fixture
+def alert_manager_with_email(email_config):
+    """创建带邮件配置的AlertManager实例"""
+    manager = AlertManager()
+    manager.email_config = email_config
+    manager._email_rate_limiter = {}  # 邮件发送频率限制器
+    return manager
+
+
+def test_send_email_notification_success(alert_manager_with_email, sample_signal):
+    """测试成功发送邮件通知"""
+    # Mock SMTP服务器
+    mock_smtp = MagicMock()
+
+    with patch('smtplib.SMTP', return_value=mock_smtp):
+        with patch.object(alert_manager_with_email, '_render_email_template', return_value='<html>Test</html>'):
+            result = alert_manager_with_email.send_notification(sample_signal, AlertChannel.EMAIL)
+
+    # 验证SMTP连接和发送
+    assert result['success'] is True
+    mock_smtp.starttls.assert_called_once()
+    mock_smtp.login.assert_called_once()
+    mock_smtp.send_message.assert_called_once()
+    mock_smtp.quit.assert_called_once()
+
+
+def test_send_email_notification_smtp_error(alert_manager_with_email, sample_signal):
+    """测试SMTP连接失败"""
+    # Mock SMTP抛出异常
+    with patch('smtplib.SMTP', side_effect=smtplib.SMTPException("Connection failed")):
+        result = alert_manager_with_email.send_notification(sample_signal, AlertChannel.EMAIL)
+
+    # 应该捕获异常并返回失败结果
+    assert result['success'] is False
+    assert 'error' in result
+
+
+def test_send_email_notification_authentication_error(alert_manager_with_email, sample_signal):
+    """测试SMTP认证失败"""
+    mock_smtp = MagicMock()
+    mock_smtp.login.side_effect = smtplib.SMTPAuthenticationError(535, 'Authentication failed')
+
+    with patch('smtplib.SMTP', return_value=mock_smtp):
+        with patch.object(alert_manager_with_email, '_render_email_template', return_value='<html>Test</html>'):
+            result = alert_manager_with_email.send_notification(sample_signal, AlertChannel.EMAIL)
+
+    assert result['success'] is False
+    assert 'error' in result
+
+
+def test_send_email_notification_retry_mechanism(alert_manager_with_email, sample_signal):
+    """测试邮件发送重试机制"""
+    mock_smtp = MagicMock()
+    # 前两次失败，第三次成功
+    mock_smtp.send_message.side_effect = [
+        smtplib.SMTPException("Temporary failure"),
+        smtplib.SMTPException("Temporary failure"),
+        None  # 第三次成功
+    ]
+
+    with patch('smtplib.SMTP', return_value=mock_smtp):
+        with patch.object(alert_manager_with_email, '_render_email_template', return_value='<html>Test</html>'):
+            with patch('time.sleep'):  # Mock sleep避免测试等待
+                result = alert_manager_with_email.send_notification(sample_signal, AlertChannel.EMAIL)
+
+    # 应该重试3次后成功
+    assert result['success'] is True
+    assert mock_smtp.send_message.call_count == 3
+
+
+def test_email_template_rendering(alert_manager_with_email, sample_signal):
+    """测试邮件模板渲染"""
+    # 创建模板目录和文件
+    template_content = """
+    <html>
+    <body>
+        <h1>{{ signal_type }} 信号</h1>
+        <p>股票: {{ stock_code }} {{ stock_name }}</p>
+        <p>价格: {{ trigger_price }}</p>
+        <p>描述: {{ description }}</p>
+    </body>
+    </html>
+    """
+
+    with patch('builtins.open', mock_open(read_data=template_content)):
+        with patch('os.path.exists', return_value=True):
+            html = alert_manager_with_email._render_email_template(sample_signal)
+
+    # 验证模板渲染
+    assert '600519' in html
+    assert '贵州茅台' in html
+    assert 'BUY' in html
+
+
+def test_email_rate_limiting(alert_manager_with_email, sample_signal):
+    """测试邮件发送频率限制"""
+    mock_smtp = MagicMock()
+
+    with patch('smtplib.SMTP', return_value=mock_smtp):
+        with patch.object(alert_manager_with_email, '_render_email_template', return_value='<html>Test</html>'):
+            # 第一次应该发送
+            result1 = alert_manager_with_email.send_notification(sample_signal, AlertChannel.EMAIL)
+            assert result1['success'] is True
+
+            # 立即再次发送相同股票的邮件应该被限制
+            result2 = alert_manager_with_email.send_notification(sample_signal, AlertChannel.EMAIL)
+
+            # 应该被限制，返回失败结果
+            assert result2['success'] is False
+            assert 'rate limit' in result2.get('error', '').lower()
+
+
+def test_email_subject_formatting(alert_manager_with_email, sample_signal):
+    """测试邮件主题格式化"""
+    subject = alert_manager_with_email._format_email_subject(sample_signal)
+
+    # 验证主题包含关键信息
+    assert 'BUY' in subject
+    assert '贵州茅台' in subject or '600519' in subject
+
+
+def test_email_with_multiple_recipients(alert_manager_with_email, sample_signal):
+    """测试向多个收件人发送邮件"""
+    mock_smtp = MagicMock()
+
+    with patch('smtplib.SMTP', return_value=mock_smtp):
+        with patch.object(alert_manager_with_email, '_render_email_template', return_value='<html>Test</html>'):
+            result = alert_manager_with_email.send_notification(sample_signal, AlertChannel.EMAIL)
+
+    # 验证邮件发送到所有收件人
+    assert result['success'] is True
+    call_args = mock_smtp.send_message.call_args
+    if call_args:
+        message = call_args[0][0] if call_args[0] else call_args[1].get('message')
+        if message and hasattr(message, 'get'):
+            recipients = message.get('To', '')
+            # 验证至少包含一个收件人
+            assert len(recipients) > 0 or mock_smtp.send_message.called

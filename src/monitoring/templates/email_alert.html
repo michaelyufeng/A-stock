@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A股交易信号提醒</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            padding: 20px;
+            text-align: center;
+            color: white;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .header.BUY {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .header.SELL {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        .header.WARNING {
+            background: linear-gradient(135deg, #ffa726 0%, #fb8c00 100%);
+        }
+        .header.INFO {
+            background: linear-gradient(135deg, #4fc3f7 0%, #0288d1 100%);
+        }
+        .content {
+            padding: 30px;
+        }
+        .signal-badge {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+        .signal-badge.BUY {
+            background-color: #4caf50;
+            color: white;
+        }
+        .signal-badge.SELL {
+            background-color: #f44336;
+            color: white;
+        }
+        .signal-badge.WARNING {
+            background-color: #ff9800;
+            color: white;
+        }
+        .signal-badge.INFO {
+            background-color: #2196f3;
+            color: white;
+        }
+        .priority-badge {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .priority-badge.critical {
+            background-color: #d32f2f;
+            color: white;
+        }
+        .priority-badge.high {
+            background-color: #f57c00;
+            color: white;
+        }
+        .priority-badge.medium {
+            background-color: #fbc02d;
+            color: #333;
+        }
+        .priority-badge.low {
+            background-color: #e0e0e0;
+            color: #666;
+        }
+        .stock-info {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 6px;
+            margin: 20px 0;
+        }
+        .stock-name {
+            font-size: 24px;
+            font-weight: bold;
+            color: #1a1a1a;
+            margin-bottom: 5px;
+        }
+        .stock-code {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 15px;
+        }
+        .price {
+            font-size: 32px;
+            font-weight: bold;
+            color: #1976d2;
+            margin: 10px 0;
+        }
+        .price-label {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .description {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .description h3 {
+            margin-top: 0;
+            color: #856404;
+            font-size: 16px;
+        }
+        .description p {
+            margin: 5px 0;
+            color: #856404;
+        }
+        .metadata {
+            margin: 20px 0;
+        }
+        .metadata-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .metadata-item:last-child {
+            border-bottom: none;
+        }
+        .metadata-label {
+            font-weight: bold;
+            color: #666;
+        }
+        .metadata-value {
+            color: #333;
+        }
+        .recommendation {
+            background-color: #e8f5e9;
+            border-left: 4px solid #4caf50;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .recommendation h3 {
+            margin-top: 0;
+            color: #2e7d32;
+            font-size: 16px;
+        }
+        .recommendation ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .recommendation li {
+            color: #2e7d32;
+            margin: 5px 0;
+        }
+        .footer {
+            background-color: #f5f5f5;
+            padding: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #999;
+        }
+        .timestamp {
+            text-align: center;
+            color: #999;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        .warning-note {
+            background-color: #ffebee;
+            border-left: 4px solid #f44336;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #c62828;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header {{ signal_type }}">
+            📊 A股交易信号提醒
+        </div>
+
+        <div class="content">
+            <div>
+                <span class="signal-badge {{ signal_type }}">{{ signal_type }}</span>
+                <span class="priority-badge {{ priority }}">{{ priority|upper }}</span>
+            </div>
+
+            <div class="stock-info">
+                <div class="stock-name">{{ stock_name }}</div>
+                <div class="stock-code">{{ stock_code }}</div>
+
+                <div class="price-label">触发价格</div>
+                <div class="price">¥{{ "%.2f"|format(trigger_price) }}</div>
+            </div>
+
+            <div class="description">
+                <h3>📌 信号描述</h3>
+                <p>{{ description }}</p>
+            </div>
+
+            {% if metadata %}
+            <div class="metadata">
+                <h3 style="color: #666; font-size: 16px; margin-bottom: 10px;">📋 技术指标</h3>
+                {% for key, value in metadata.items() %}
+                <div class="metadata-item">
+                    <span class="metadata-label">{{ key }}</span>
+                    <span class="metadata-value">{{ value }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            {% if signal_type == 'BUY' %}
+            <div class="recommendation">
+                <h3>💡 买入建议</h3>
+                <ul>
+                    <li>建议关注该股票的短期走势</li>
+                    <li>建议仓位：不超过总资金的20%</li>
+                    <li>建议止损位：当前价格的-8%</li>
+                    <li>建议止盈位：当前价格的+15%</li>
+                    <li>注意控制风险，理性投资</li>
+                </ul>
+            </div>
+            {% elif signal_type == 'SELL' %}
+            <div class="recommendation">
+                <h3>💡 卖出建议</h3>
+                <ul>
+                    <li>建议评估当前持仓情况</li>
+                    <li>如有盈利，考虑部分获利了结</li>
+                    <li>如遇亏损，注意及时止损</li>
+                    <li>关注市场整体走势和消息面</li>
+                    <li>理性决策，避免情绪化操作</li>
+                </ul>
+            </div>
+            {% elif signal_type == 'WARNING' %}
+            <div class="warning-note">
+                <strong>⚠️ 风险提示</strong><br>
+                该信号表明当前存在风险，请密切关注市场动态，做好风险控制准备。
+            </div>
+            {% endif %}
+
+            <div class="metadata">
+                <div class="metadata-item">
+                    <span class="metadata-label">信号类别</span>
+                    <span class="metadata-value">{{ category }}</span>
+                </div>
+                <div class="metadata-item">
+                    <span class="metadata-label">触发时间</span>
+                    <span class="metadata-value">{{ timestamp.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+                </div>
+            </div>
+
+            <div class="warning-note" style="margin-top: 30px;">
+                <strong>⚠️ 免责声明</strong><br>
+                本提醒仅供参考，不构成投资建议。股市有风险，投资需谨慎。请根据自身情况做出理性投资决策。
+            </div>
+
+            <div class="timestamp">
+                邮件发送时间: {{ now.strftime('%Y-%m-%d %H:%M:%S') }}
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>A股量化交易系统 - 智能监控提醒</p>
+            <p>如需停止接收提醒，请联系系统管理员</p>
+        </div>
+    </div>
+</body>
+</html>

@@ -15,6 +15,14 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Dict, List, Optional, Any
 import yaml
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+import os
+import time
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from src.monitoring.signal_detector import Signal
 
@@ -64,9 +72,17 @@ class AlertManager:
         self.rules: Dict[str, AlertRule] = {}
         self.alert_history: List[Dict[str, Any]] = []
         self.last_alert_time: Dict[str, datetime] = {}  # {rule_id-stock_code: timestamp}
+        self._email_rate_limiter: Dict[str, datetime] = {}  # {stock_code: last_email_time}
 
         # 加载配置
         self._load_config(config_path)
+
+        # 初始化Jinja2模板环境
+        template_dir = os.path.join(os.path.dirname(__file__), 'templates')
+        self.jinja_env = Environment(
+            loader=FileSystemLoader(template_dir),
+            autoescape=select_autoescape(['html', 'xml'])
+        )
 
     def _load_config(self, config_path: str):
         """加载配置文件"""
@@ -79,16 +95,40 @@ class AlertManager:
             self.default_cooldown_minutes = alerts_config.get('default_cooldown_minutes', 60)
             self.max_history_days = alerts_config.get('max_history_days', 30)
 
+            # 加载邮件配置
+            self.email_config = alerts_config.get('email', {})
+            self._load_email_env_vars()
+
             logger.info(f"Loaded alert config: cooldown={self.default_cooldown_minutes}min")
 
         except FileNotFoundError:
             logger.warning(f"Config file not found: {config_path}, using defaults")
             self.default_cooldown_minutes = 60
             self.max_history_days = 30
+            self.email_config = {}
         except Exception as e:
             logger.error(f"Error loading config: {e}")
             self.default_cooldown_minutes = 60
             self.max_history_days = 30
+            self.email_config = {}
+
+    def _load_email_env_vars(self):
+        """从环境变量加载敏感邮件配置"""
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        # 替换配置中的环境变量占位符
+        if 'sender' in self.email_config:
+            sender = self.email_config['sender']
+            if isinstance(sender, str) and sender.startswith('${') and sender.endswith('}'):
+                env_var = sender[2:-1]
+                self.email_config['sender'] = os.getenv(env_var, '')
+
+        if 'sender_password' in self.email_config:
+            password = self.email_config['sender_password']
+            if isinstance(password, str) and password.startswith('${') and password.endswith('}'):
+                env_var = password[2:-1]
+                self.email_config['sender_password'] = os.getenv(env_var, '')
 
     # ========================================================================
     # 规则管理
@@ -327,10 +367,210 @@ class AlertManager:
             logger.info(log_msg)
 
     def _send_email_notification(self, signal: Signal):
-        """发送邮件通知（待实现）"""
-        logger.warning(f"Email notification not implemented yet for {signal.stock_code}")
-        # TODO: 实现邮件通知
-        pass
+        """
+        发送邮件通知
+
+        Args:
+            signal: Signal对象
+
+        Raises:
+            Exception: 邮件发送失败时抛出异常
+        """
+        # 检查邮件配置
+        if not self.email_config:
+            logger.error("Email configuration not found")
+            raise ValueError("Email configuration not found")
+
+        # 检查必需的配置项
+        required_fields = ['smtp_server', 'smtp_port', 'sender', 'sender_password', 'recipients']
+        for field in required_fields:
+            if field not in self.email_config or not self.email_config[field]:
+                logger.error(f"Missing email config field: {field}")
+                raise ValueError(f"Missing email config field: {field}")
+
+        # 检查发送频率限制
+        if self._is_email_rate_limited(signal.stock_code):
+            logger.info(f"Email rate limited for {signal.stock_code}")
+            raise ValueError(f"Email rate limited for {signal.stock_code}")
+
+        # 获取配置参数
+        smtp_server = self.email_config['smtp_server']
+        smtp_port = self.email_config['smtp_port']
+        sender = self.email_config['sender']
+        sender_password = self.email_config['sender_password']
+        recipients = self.email_config['recipients']
+        use_tls = self.email_config.get('use_tls', True)
+        max_retries = self.email_config.get('max_retries', 3)
+        retry_delay = self.email_config.get('retry_delay', 1)
+
+        # 构建邮件
+        msg = MIMEMultipart('alternative')
+        msg['From'] = sender
+        msg['To'] = ', '.join(recipients) if isinstance(recipients, list) else recipients
+        msg['Subject'] = self._format_email_subject(signal)
+
+        # 渲染HTML内容
+        html_content = self._render_email_template(signal)
+        html_part = MIMEText(html_content, 'html', 'utf-8')
+        msg.attach(html_part)
+
+        # 重试机制发送邮件
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                # 连接SMTP服务器
+                server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
+
+                if use_tls:
+                    server.starttls()
+
+                # 登录
+                server.login(sender, sender_password)
+
+                # 发送邮件
+                server.send_message(msg)
+
+                # 关闭连接
+                server.quit()
+
+                # 更新发送频率限制
+                self._update_email_rate_limit(signal.stock_code)
+
+                logger.info(f"Email sent successfully for {signal.stock_code} (attempt {attempt + 1})")
+                return
+
+            except smtplib.SMTPAuthenticationError as e:
+                logger.error(f"SMTP authentication failed: {e}")
+                raise  # 认证错误不重试
+
+            except (smtplib.SMTPException, OSError, ConnectionError) as e:
+                last_error = e
+                logger.warning(f"Email sending failed (attempt {attempt + 1}/{max_retries}): {e}")
+
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                else:
+                    logger.error(f"Email sending failed after {max_retries} attempts")
+                    raise last_error
+
+            except Exception as e:
+                logger.error(f"Unexpected error sending email: {e}")
+                raise
+
+    def _format_email_subject(self, signal: Signal) -> str:
+        """
+        格式化邮件主题
+
+        Args:
+            signal: Signal对象
+
+        Returns:
+            格式化后的邮件主题
+        """
+        subject_template = self.email_config.get(
+            'subject_template',
+            '[A股监控] {signal_type} - {stock_name}'
+        )
+
+        return subject_template.format(
+            signal_type=signal.signal_type,
+            stock_code=signal.stock_code,
+            stock_name=signal.stock_name,
+            priority=signal.priority
+        )
+
+    def _render_email_template(self, signal: Signal) -> str:
+        """
+        渲染邮件HTML模板
+
+        Args:
+            signal: Signal对象
+
+        Returns:
+            渲染后的HTML内容
+        """
+        try:
+            template = self.jinja_env.get_template('email_alert.html')
+
+            html_content = template.render(
+                signal_type=signal.signal_type,
+                stock_code=signal.stock_code,
+                stock_name=signal.stock_name,
+                description=signal.description,
+                priority=signal.priority,
+                trigger_price=signal.trigger_price,
+                timestamp=signal.timestamp,
+                category=signal.category,
+                metadata=signal.metadata,
+                now=datetime.now()
+            )
+
+            return html_content
+
+        except Exception as e:
+            logger.error(f"Error rendering email template: {e}")
+            # 返回简单的文本版本
+            return self._render_fallback_email(signal)
+
+    def _render_fallback_email(self, signal: Signal) -> str:
+        """
+        渲染备用的简单邮件模板
+
+        Args:
+            signal: Signal对象
+
+        Returns:
+            简单的HTML内容
+        """
+        return f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; padding: 20px;">
+            <h2 style="color: #333;">A股交易信号提醒</h2>
+            <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <p><strong>信号类型:</strong> {signal.signal_type}</p>
+                <p><strong>股票代码:</strong> {signal.stock_code}</p>
+                <p><strong>股票名称:</strong> {signal.stock_name}</p>
+                <p><strong>触发价格:</strong> ¥{signal.trigger_price:.2f}</p>
+                <p><strong>优先级:</strong> {signal.priority}</p>
+                <p><strong>描述:</strong> {signal.description}</p>
+                <p><strong>时间:</strong> {signal.timestamp.strftime('%Y-%m-%d %H:%M:%S')}</p>
+            </div>
+            <p style="color: #999; font-size: 12px;">
+                本提醒仅供参考，不构成投资建议。股市有风险，投资需谨慎。
+            </p>
+        </body>
+        </html>
+        """
+
+    def _is_email_rate_limited(self, stock_code: str) -> bool:
+        """
+        检查邮件发送是否超出频率限制
+
+        Args:
+            stock_code: 股票代码
+
+        Returns:
+            是否被限制
+        """
+        rate_limit_seconds = self.email_config.get('rate_limit_seconds', 300)
+
+        if stock_code not in self._email_rate_limiter:
+            return False
+
+        last_time = self._email_rate_limiter[stock_code]
+        elapsed = (datetime.now() - last_time).total_seconds()
+
+        return elapsed < rate_limit_seconds
+
+    def _update_email_rate_limit(self, stock_code: str):
+        """
+        更新邮件发送时间记录
+
+        Args:
+            stock_code: 股票代码
+        """
+        self._email_rate_limiter[stock_code] = datetime.now()
 
     def _send_wechat_notification(self, signal: Signal):
         """发送微信通知（待实现）"""

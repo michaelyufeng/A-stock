@@ -1,67 +1,105 @@
-# A股量化交易系统配置文件
+# =============================================================================
+# A股量化交易系统 - 主配置文件
+# =============================================================================
+# 说明: 本文件包含系统运行的核心配置，包括数据源、AI服务、日志、市场规则等
+# 详细文档: docs/CONFIGURATION_GUIDE.md
+# =============================================================================
 
+# -----------------------------------------------------------------------------
+# 数据源配置
+# -----------------------------------------------------------------------------
 data:
+  # 数据提供商 (目前仅支持akshare)
   provider: akshare
+
+  # 数据缓存设置 - 提升性能，减少API调用
   cache:
-    enabled: true
-    directory: ./data/cache
-    ttl:
-      realtime: 60        # 实时行情缓存60秒
-      daily: 3600         # 日线数据缓存1小时
-      financial: 86400    # 财务数据缓存1天
+    enabled: true                    # 是否启用缓存 (推荐: true)
+    directory: ./data/cache          # 缓存目录路径
+    ttl:                             # 缓存生存时间 (秒)
+      realtime: 60                   # 实时行情缓存60秒 (范围: 30-120)
+      daily: 3600                    # 日线数据缓存1小时 (范围: 1800-7200)
+      financial: 86400               # 财务数据缓存1天 (范围: 43200-172800)
 
-  # 数据源配置
+  # AKShare数据源接口名称 - 请勿随意修改
   sources:
-    stock_list: "stock_zh_a_spot"
-    realtime_quote: "stock_zh_a_spot_em"
-    daily_kline: "stock_zh_a_hist"
-    financial: "stock_financial_analysis_indicator"
-    money_flow: "stock_individual_fund_flow"
+    stock_list: "stock_zh_a_spot"                      # 股票列表
+    realtime_quote: "stock_zh_a_spot_em"               # 实时行情
+    daily_kline: "stock_zh_a_hist"                     # 历史K线
+    financial: "stock_financial_analysis_indicator"    # 财务指标
+    money_flow: "stock_individual_fund_flow"           # 资金流向
 
+# -----------------------------------------------------------------------------
+# AI服务配置 - 用于智能分析和评级
+# -----------------------------------------------------------------------------
 ai:
-  provider: deepseek
-  model: deepseek-chat
-  reasoning_model: deepseek-reasoner
-  temperature: 0.7
-  max_tokens: 4000
-  timeout: 30
+  provider: deepseek                 # AI服务提供商 (deepseek)
+  model: deepseek-chat               # 对话模型
+  reasoning_model: deepseek-reasoner # 推理模型
+  temperature: 0.7                   # 生成温度 (范围: 0.0-2.0, 推荐: 0.5-0.9)
+  max_tokens: 4000                   # 最大生成令牌数 (范围: 1000-8000)
+  timeout: 30                        # 请求超时秒数 (范围: 15-60)
 
-  # AI评级权重
+  # AI评级权重分配 - 四项之和必须为1.0
   rating_weights:
-    technical: 0.30
-    fundamental: 0.30
-    capital: 0.25
-    sentiment: 0.15
+    technical: 0.30                  # 技术分析权重 (K线、指标)
+    fundamental: 0.30                # 基本面权重 (财务、估值)
+    capital: 0.25                    # 资金流向权重 (主力资金)
+    sentiment: 0.15                  # 市场情绪权重 (涨跌幅、成交量)
 
+# -----------------------------------------------------------------------------
+# 日志配置
+# -----------------------------------------------------------------------------
 logging:
+  # 日志级别: DEBUG(调试) | INFO(一般) | WARNING(警告) | ERROR(错误) | CRITICAL(严重)
   level: INFO
+
+  # 日志格式 - 使用loguru格式化语法
   format: "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+
+  # 日志文件路径
   files:
-    app: ./logs/app.log
-    error: ./logs/error.log
-    trade: ./logs/trade.log
-  rotation: "100 MB"
-  retention: "30 days"
+    app: ./logs/app.log              # 应用主日志
+    error: ./logs/error.log          # 错误日志
+    trade: ./logs/trade.log          # 交易日志
 
+  # 日志轮转设置
+  rotation: "100 MB"                 # 单个日志文件最大大小 (可选: "10 MB", "100 MB", "1 GB")
+  retention: "30 days"               # 日志保留时间 (可选: "7 days", "30 days", "90 days")
+
+# -----------------------------------------------------------------------------
+# A股市场规则 - 根据中国A股市场规定设置，请勿随意修改
+# -----------------------------------------------------------------------------
 market:
-  # A股涨跌停限制
+  # 涨跌停限制 - 不同板块有不同的限制
   limit_ratio:
-    main_board: 0.10      # 主板10%
-    star_market: 0.20     # 科创板20%
-    gem: 0.20             # 创业板20%
+    main_board: 0.10                 # 主板/中小板: ±10% (沪深主板、60/00/002开头)
+    star_market: 0.20                # 科创板: ±20% (688开头)
+    gem: 0.20                        # 创业板(注册制): ±20% (300开头，2020年8月后)
 
-  # 交易时间
+  # 交易时间 - A股统一交易时间
   trading_hours:
-    morning_start: "09:30"
-    morning_end: "11:30"
-    afternoon_start: "13:00"
-    afternoon_end: "15:00"
+    morning_start: "09:30"           # 早盘开盘时间
+    morning_end: "11:30"             # 早盘收盘时间
+    afternoon_start: "13:00"         # 午盘开盘时间
+    afternoon_end: "15:00"           # 午盘收盘时间
 
   # 最小交易单位
-  min_lot: 100            # 1手=100股
+  min_lot: 100                       # 1手 = 100股 (A股固定规则)
 
+# -----------------------------------------------------------------------------
+# 数据库配置 - 使用SQLite存储历史数据和回测结果
+# -----------------------------------------------------------------------------
 database:
-  path: ./data/storage/a_stock.db
-  echo: false
-  pool_size: 5
-  max_overflow: 10
+  path: ./data/storage/a_stock.db    # SQLite数据库文件路径
+  echo: false                        # 是否打印SQL语句 (调试时可设为true)
+  pool_size: 5                       # 连接池大小 (范围: 3-10)
+  max_overflow: 10                   # 最大溢出连接数 (范围: 5-20)
+
+# =============================================================================
+# 配置说明:
+# 1. 修改配置后需重启系统生效
+# 2. 关键参数建议先回测验证再应用到实盘
+# 3. 详细的参数说明和推荐值请参考 docs/CONFIGURATION_GUIDE.md
+# 4. 敏感信息(如API密钥)建议使用环境变量，不要直接写入配置文件
+# =============================================================================
