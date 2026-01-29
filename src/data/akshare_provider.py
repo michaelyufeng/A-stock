@@ -1,7 +1,7 @@
 """AKShare数据提供者"""
 import akshare as ak
 import pandas as pd
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 from src.core.logger import get_logger
 from src.core.config_manager import ConfigManager
@@ -85,6 +85,44 @@ class AKShareProvider:
         except Exception as e:
             logger.error(f"Failed to fetch realtime quote for {code}: {e}")
             raise
+
+    def get_realtime_quotes(self, codes: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        批量获取实时行情（优化版本，减少API调用）
+
+        Args:
+            codes: 股票代码列表
+
+        Returns:
+            行情字典 {code: quote_data}
+        """
+        if not codes:
+            return {}
+
+        # 标准化代码
+        codes = [strip_market_suffix(code) for code in codes]
+
+        try:
+            logger.info(f"Fetching realtime quotes for {len(codes)} stocks...")
+            # 一次性获取全市场数据
+            df = ak.stock_zh_a_spot_em()
+
+            # 筛选指定股票
+            result = {}
+            for code in codes:
+                stock_data = df[df['代码'] == code]
+                if not stock_data.empty:
+                    quote = stock_data.iloc[0].to_dict()
+                    result[code] = quote
+                else:
+                    logger.warning(f"Stock {code} not found in realtime data")
+
+            logger.info(f"Successfully fetched {len(result)} quotes")
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to fetch realtime quotes: {e}")
+            return {}
 
     def get_daily_kline(
         self,
