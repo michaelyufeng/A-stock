@@ -62,3 +62,6 @@ htmlcov/
 
 # Backtest results
 backtest_results/
+
+# Generated reports
+reports/
