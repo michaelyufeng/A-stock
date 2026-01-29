@@ -63,7 +63,8 @@ class BacktestEngine:
         strategy_class: Type[BaseStrategy],
         data: pd.DataFrame,
         start_date: Optional[str] = None,
-        end_date: Optional[str] = None
+        end_date: Optional[str] = None,
+        stock_code: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         运行回测
@@ -73,6 +74,7 @@ class BacktestEngine:
             data: K线数据DataFrame（需包含OHLCV）
             start_date: 开始日期（YYYY-MM-DD）
             end_date: 结束日期（YYYY-MM-DD）
+            stock_code: 股票代码（用于识别板块和涨跌停限制）
 
         Returns:
             回测结果字典：
@@ -99,18 +101,13 @@ class BacktestEngine:
         # 1. 创建Cerebro引擎
         self.cerebro = bt.Cerebro()
 
-        # 2. 设置初始资金
-        self.cerebro.broker.setcash(self.initial_cash)
+        # 2. 使用自定义A股Broker（包含涨跌停限制、交易单位、印花税等）
+        from src.backtest.a_share_broker import AShareBroker
+        broker = AShareBroker(stock_code=stock_code)
+        self.cerebro.broker = broker
 
-        # 3. 设置佣金（A股特色）
-        # 注意：backtrader的佣金是双向的，我们设置总佣金率
-        # 印花税只在卖出时收取，这里先设置基础佣金
-        total_commission = self.commission
-        self.cerebro.broker.setcommission(
-            commission=total_commission,
-            stocklike=True,
-            percabs=True  # 百分比佣金
-        )
+        # 3. 设置初始资金
+        self.cerebro.broker.setcash(self.initial_cash)
 
         # 4. 准备并添加数据
         bt_data = self._prepare_data(data, start_date, end_date)
@@ -128,6 +125,10 @@ class BacktestEngine:
         self.cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
         self.cerebro.addanalyzer(bt.analyzers.Returns, _name='returns')
         self.cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trades')
+
+        # 7.1 添加自定义交易记录分析器
+        from src.backtest.trade_recorder import TradeRecorder
+        self.cerebro.addanalyzer(TradeRecorder, _name='trade_recorder')
 
         # 8. 记录初始资金
         initial_value = self.cerebro.broker.getvalue()
@@ -319,6 +320,9 @@ class BacktestEngine:
                 self.buy_date = None
                 self.entry_price = None
 
+                # 记录每日资产价值
+                self.daily_values = []
+
                 logger.info(f"Backtrader策略包装器初始化: {base_strategy_class.__name__}")
 
             def next(self):
@@ -330,12 +334,19 @@ class BacktestEngine:
                 2. 未持仓时，检查买入信号
                 3. 持仓时，检查卖出信号（T+1、止损止盈）
                 """
+                # 记录当日资产价值
+                current_date = self.data.datetime.date(0)
+                current_value = self.broker.getvalue()
+                self.daily_values.append({
+                    'date': pd.Timestamp(current_date),
+                    'value': current_value
+                })
+
                 # 如果有未完成订单，等待
                 if self.order:
                     return
 
-                # 获取当前日期和价格
-                current_date = self.data.datetime.date(0)
+                # 获取当前价格
                 current_price = self.data.close[0]
 
                 # 查询当前日期的信号
@@ -460,6 +471,7 @@ class BacktestEngine:
         drawdown_analysis = strategy.analyzers.drawdown.get_analysis()
         returns_analysis = strategy.analyzers.returns.get_analysis()
         trades_analysis = strategy.analyzers.trades.get_analysis()
+        trade_recorder_analysis = strategy.analyzers.trade_recorder.get_analysis()
 
         # 计算收益率
         total_return = (final_value - initial_value) / initial_value
@@ -493,6 +505,28 @@ class BacktestEngine:
             # 如果没有交易,分析器可能没有这些字段
             pass
 
+        # 获取详细交易记录
+        trades_list = trade_recorder_analysis.get('trades', [])
+
+        # 获取每日资产价值（从broker的value观察器）
+        portfolio_values = self._extract_portfolio_values(strategy)
+
+        # 使用BacktestMetrics计算详细指标
+        from src.backtest.metrics import BacktestMetrics
+
+        if len(portfolio_values) > 0:
+            metrics_calculator = BacktestMetrics(
+                portfolio_values=portfolio_values,
+                trades=trades_list,
+                initial_capital=initial_value
+            )
+
+            detailed_metrics = metrics_calculator.calculate_all_metrics()
+            summary_text = metrics_calculator.format_summary()
+        else:
+            detailed_metrics = {}
+            summary_text = ""
+
         results = {
             'initial_value': initial_value,
             'final_value': final_value,
@@ -500,23 +534,55 @@ class BacktestEngine:
             'sharpe_ratio': sharpe_ratio,
             'max_drawdown': max_drawdown,
             'total_trades': total_trades,
-            'win_rate': win_rate
+            'win_rate': win_rate,
+            # 添加详细指标
+            'metrics': detailed_metrics,
+            'summary': summary_text,
+            'trades': trades_list
         }
 
-        # 打印结果摘要
-        logger.info("=" * 60)
-        logger.info("回测结果摘要")
-        logger.info("-" * 60)
-        logger.info(f"初始资金: {initial_value:,.2f}")
-        logger.info(f"最终资金: {final_value:,.2f}")
-        logger.info(f"总收益率: {total_return:.2%}")
-        logger.info(f"夏普比率: {sharpe_ratio:.4f}")
-        logger.info(f"最大回撤: {max_drawdown:.2%}")
-        logger.info(f"总交易次数: {total_trades}")
-        logger.info(f"胜率: {win_rate:.2%}")
-        logger.info("=" * 60)
+        # 打印详细摘要
+        if summary_text:
+            logger.info(summary_text)
+        else:
+            # 如果没有详细指标，打印基本摘要
+            logger.info("=" * 60)
+            logger.info("回测结果摘要")
+            logger.info("-" * 60)
+            logger.info(f"初始资金: {initial_value:,.2f}")
+            logger.info(f"最终资金: {final_value:,.2f}")
+            logger.info(f"总收益率: {total_return:.2%}")
+            logger.info(f"夏普比率: {sharpe_ratio:.4f}")
+            logger.info(f"最大回撤: {max_drawdown:.2%}")
+            logger.info(f"总交易次数: {total_trades}")
+            logger.info(f"胜率: {win_rate:.2%}")
+            logger.info("=" * 60)
 
         return results
+
+    def _extract_portfolio_values(self, strategy) -> pd.Series:
+        """
+        从策略中提取每日资产价值
+
+        Args:
+            strategy: backtrader策略实例
+
+        Returns:
+            每日资产价值的Series，索引为日期
+        """
+        try:
+            # 从策略中获取记录的每日价值
+            if hasattr(strategy, 'daily_values') and len(strategy.daily_values) > 0:
+                df = pd.DataFrame(strategy.daily_values)
+                series = pd.Series(df['value'].values, index=df['date'])
+                return series
+            else:
+                logger.warning("策略中没有记录每日资产价值")
+                return pd.Series()
+
+        except Exception as e:
+            logger.warning(f"无法提取资产价值历史: {e}")
+            return pd.Series()
 
     def plot_results(self, output_path: Optional[str] = None):
         """
