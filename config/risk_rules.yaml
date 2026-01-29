@@ -1,0 +1,72 @@
+# 风险管理配置
+
+# 仓位管理
+position:
+  max_single_position: 0.20      # 单一持仓最大20%
+  max_sector_exposure: 0.30      # 单一行业最大30%
+  max_total_position: 0.95       # 总仓位最大95%
+  min_position_value: 10000      # 最小建仓金额1万元
+
+# 交易限制
+trade_restrictions:
+  禁止ST股: true
+  禁止退市风险股: true
+  min_listing_days: 30           # 最少上市30天
+  min_market_cap: 2000000000     # 最小市值20亿
+  min_daily_volume: 10000000     # 最小日成交额1000万
+
+  # A股特色限制
+  avoid_continuous_limit_up: true      # 避免连续涨停
+  avoid_continuous_limit_down: true    # 避免连续跌停
+  max_continuous_limit: 3              # 最多连续涨跌停天数
+
+# 止损止盈
+stop_loss:
+  enabled: true
+  method: "fixed"                # fixed/trailing/atr
+  fixed_ratio: 0.08              # 固定止损8%
+  trailing_ratio: 0.05           # 移动止损5%
+  atr_multiplier: 2.0            # ATR止损倍数
+
+take_profit:
+  enabled: true
+  method: "fixed"                # fixed/dynamic
+  fixed_ratio: 0.15              # 固定止盈15%
+  partial_take_profit:
+    enabled: true
+    first_target: 0.10           # 第一目标10%
+    first_size: 0.50             # 减仓50%
+
+# A股特色风控
+a_share_specific:
+  t1_settlement: true            # T+1交易制度
+  check_limit_price: true        # 检查涨跌停
+
+  # 涨跌停处理
+  limit_up_action: "hold"        # 涨停处理：hold/sell
+  limit_down_action: "hold"      # 跌停处理：hold/emergency_sell
+
+  # 特殊时段
+  avoid_before_holiday: false    # 避免节前买入
+  avoid_year_end: false          # 避免年末买入
+
+# 风险预警
+alerts:
+  position_concentration:
+    warning: 0.15                # 单一持仓15%预警
+    critical: 0.20               # 单一持仓20%严重
+
+  drawdown:
+    warning: 0.05                # 5%回撤预警
+    critical: 0.10               # 10%回撤严重
+
+  volatility:
+    warning: 0.30                # 30%波动率预警
+    critical: 0.50               # 50%波动率严重
+
+# 交易限制
+trading_limits:
+  max_trades_per_day: 5          # 每日最多交易5次
+  max_trades_per_week: 15        # 每周最多交易15次
+  min_holding_period: 1          # 最短持仓1天（T+1）
+  cooling_period: 5              # 同一股票冷却期5天

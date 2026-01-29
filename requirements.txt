@@ -1,0 +1,38 @@
+# Core dependencies
+akshare>=1.12.0
+pandas>=2.0.0
+numpy>=1.24.0
+
+# AI analysis
+openai>=1.0.0
+tiktoken>=0.5.0
+
+# Technical indicators
+pandas_ta>=0.3.14
+
+# Backtest framework
+backtrader>=1.9.78
+matplotlib>=3.7.0
+mplfinance>=0.12.0
+
+# Data storage
+sqlalchemy>=2.0.0
+
+# Configuration and logging
+pyyaml>=6.0
+python-dotenv>=1.0.0
+loguru>=0.7.0
+
+# Utilities
+tqdm>=4.65.0
+click>=8.1.0
+colorama>=0.4.6
+tabulate>=0.9.0
+
+# Templates and reporting
+jinja2>=3.1.0
+markdown>=3.4.0
+
+# Performance optimization
+joblib>=1.3.0
+diskcache>=5.6.0

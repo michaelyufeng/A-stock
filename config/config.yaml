@@ -1,0 +1,67 @@
+# A股量化交易系统配置文件
+
+data:
+  provider: akshare
+  cache:
+    enabled: true
+    directory: ./data/cache
+    ttl:
+      realtime: 60        # 实时行情缓存60秒
+      daily: 3600         # 日线数据缓存1小时
+      financial: 86400    # 财务数据缓存1天
+
+  # 数据源配置
+  sources:
+    stock_list: "stock_zh_a_spot"
+    realtime_quote: "stock_zh_a_spot_em"
+    daily_kline: "stock_zh_a_hist"
+    financial: "stock_financial_analysis_indicator"
+    money_flow: "stock_individual_fund_flow"
+
+ai:
+  provider: deepseek
+  model: deepseek-chat
+  reasoning_model: deepseek-reasoner
+  temperature: 0.7
+  max_tokens: 4000
+  timeout: 30
+
+  # AI评级权重
+  rating_weights:
+    technical: 0.30
+    fundamental: 0.30
+    capital: 0.25
+    sentiment: 0.15
+
+logging:
+  level: INFO
+  format: "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
+  files:
+    app: ./logs/app.log
+    error: ./logs/error.log
+    trade: ./logs/trade.log
+  rotation: "100 MB"
+  retention: "30 days"
+
+market:
+  # A股涨跌停限制
+  limit_ratio:
+    main_board: 0.10      # 主板10%
+    star_market: 0.20     # 科创板20%
+    gem: 0.20             # 创业板20%
+
+  # 交易时间
+  trading_hours:
+    morning_start: "09:30"
+    morning_end: "11:30"
+    afternoon_start: "13:00"
+    afternoon_end: "15:00"
+
+  # 最小交易单位
+  min_lot: 100            # 1手=100股
+
+database:
+  path: ./data/storage/a_stock.db
+  echo: false
+  pool_size: 5
+  max_overflow: 10
