@@ -15,6 +15,61 @@ logger = get_logger(__name__)
 class StockRater:
     """AI综合评级系统，整合技术面、基本面、资金面分析"""
 
+    # Rating thresholds
+    RATING_BUY_THRESHOLD = 70
+    RATING_HOLD_THRESHOLD = 45
+
+    # RSI thresholds
+    RSI_HEALTHY_LOW = 40
+    RSI_HEALTHY_HIGH = 70
+    RSI_OVERSOLD = 30
+    RSI_OVERBOUGHT = 80
+
+    # Target price gains
+    BUY_TARGET_GAIN_MIN = 0.05
+    BUY_TARGET_GAIN_MAX = 0.20
+    HOLD_TARGET_GAIN = 0.03
+    SELL_LOSS_MIN = 0.05
+    SELL_LOSS_MAX = 0.15
+
+    # Stop loss ratios
+    STOP_LOSS_BUY_MIN = 0.05
+    STOP_LOSS_BUY_MAX = 0.10
+    STOP_LOSS_SELL = 0.02
+    STOP_LOSS_HOLD = 0.07
+
+    # Volume thresholds
+    VOLUME_SURGE_RATIO = 1.2
+    VOLUME_NORMAL_RATIO = 1.0
+
+    # ATR volatility thresholds
+    ATR_LOW_VOLATILITY = 0.03
+    ATR_MEDIUM_VOLATILITY = 0.05
+
+    # KDJ thresholds
+    KDJ_OVERBOUGHT = 80
+
+    # Price change thresholds
+    PRICE_CHANGE_HIGH = 8.0
+
+    # Confidence calculation constants
+    CONSISTENCY_DIVISOR = 60
+    SCORE_EXTREME_THRESHOLD = 50
+    SCORE_HIGH_THRESHOLD = 80
+    SCORE_LOW_THRESHOLD = 30
+    CONFIDENCE_HIGH_MULTIPLIER = 1.15
+    CONFIDENCE_LOW_MULTIPLIER = 1.1
+
+    # Score rating thresholds
+    SCORE_EXCELLENT = 75
+    SCORE_GOOD = 60
+    SCORE_FAIR = 40
+
+    # Minimum data requirements
+    MIN_KLINE_ROWS = 2
+    MIN_FINANCIAL_ROWS = 1
+    MIN_MONEY_FLOW_ROWS = 1
+
     def __init__(self):
         """初始化股票评级器"""
         logger.info("Initializing StockRater...")
@@ -35,6 +90,103 @@ class StockRater:
         }
 
         logger.info(f"StockRater initialized with weights: {self.weights}")
+
+    def _standardize_dataframe_columns(self, df: pd.DataFrame, df_type: str) -> pd.DataFrame:
+        """
+        Standardize DataFrame column names to English
+
+        Args:
+            df: Input DataFrame
+            df_type: Type of DataFrame ('kline', 'financial', 'money_flow')
+
+        Returns:
+            DataFrame with standardized column names
+        """
+        df_copy = df.copy()
+
+        if df_type == 'kline':
+            column_map = {
+                '日期': 'date',
+                '收盘': 'close',
+                '开盘': 'open',
+                '最高': 'high',
+                '最低': 'low',
+                '成交量': 'volume'
+            }
+        elif df_type == 'financial':
+            column_map = {
+                '净资产收益率': 'roe',
+                '毛利率': 'gross_margin',
+                '净利润': 'net_profit',
+                '营业收入': 'revenue',
+                '资产负债率': 'debt_ratio',
+                '流动比率': 'current_ratio',
+                '市盈率': 'pe_ratio',
+                '市净率': 'pb_ratio'
+            }
+        elif df_type == 'money_flow':
+            column_map = {
+                '主力净流入': 'main_net_inflow',
+                '成交量': 'volume'
+            }
+        else:
+            return df_copy
+
+        # Only rename columns that exist in the mapping
+        existing_columns = {k: v for k, v in column_map.items() if k in df_copy.columns}
+        if existing_columns:
+            df_copy = df_copy.rename(columns=existing_columns)
+
+        return df_copy
+
+    def _validate_inputs(
+        self,
+        stock_code: str,
+        kline_df: pd.DataFrame,
+        financial_df: pd.DataFrame,
+        money_flow_df: pd.DataFrame
+    ) -> None:
+        """
+        Validate all inputs comprehensively
+
+        Args:
+            stock_code: Stock code
+            kline_df: K-line data
+            financial_df: Financial data
+            money_flow_df: Money flow data
+
+        Raises:
+            ValueError: If validation fails with clear error messages
+        """
+        # Check stock code format
+        if not stock_code or not isinstance(stock_code, str):
+            raise ValueError("Stock code must be a non-empty string")
+
+        # Check DataFrames are not empty
+        if kline_df.empty:
+            raise ValueError("K-line DataFrame cannot be empty")
+        if financial_df.empty:
+            raise ValueError("Financial DataFrame cannot be empty")
+        if money_flow_df.empty:
+            raise ValueError("Money flow DataFrame cannot be empty")
+
+        # Check minimum data length
+        if len(kline_df) < self.MIN_KLINE_ROWS:
+            raise ValueError(f"K-line data must have at least {self.MIN_KLINE_ROWS} rows, got {len(kline_df)}")
+        if len(financial_df) < self.MIN_FINANCIAL_ROWS:
+            raise ValueError(f"Financial data must have at least {self.MIN_FINANCIAL_ROWS} rows, got {len(financial_df)}")
+        if len(money_flow_df) < self.MIN_MONEY_FLOW_ROWS:
+            raise ValueError(f"Money flow data must have at least {self.MIN_MONEY_FLOW_ROWS} rows, got {len(money_flow_df)}")
+
+        # Check required columns exist in kline_df (after standardization, should have 'close')
+        required_kline_cols = ['close']
+        missing_cols = [col for col in required_kline_cols if col not in kline_df.columns]
+        if missing_cols:
+            raise ValueError(f"K-line DataFrame missing required columns: {missing_cols}")
+
+        # Check for NaN in critical fields
+        if kline_df['close'].isnull().any():
+            raise ValueError("K-line 'close' column contains NaN values")
 
     def analyze_stock(
         self,
@@ -60,9 +212,13 @@ class StockRater:
         """
         logger.info(f"Analyzing stock {stock_code}...")
 
-        # 验证输入数据
-        if kline_df.empty or financial_df.empty or money_flow_df.empty:
-            raise ValueError("Input DataFrames cannot be empty")
+        # Standardize column names
+        kline_df = self._standardize_dataframe_columns(kline_df, 'kline')
+        financial_df = self._standardize_dataframe_columns(financial_df, 'financial')
+        money_flow_df = self._standardize_dataframe_columns(money_flow_df, 'money_flow')
+
+        # Validate inputs
+        self._validate_inputs(stock_code, kline_df, financial_df, money_flow_df)
 
         # 1. 技术面分析
         technical_score = self._analyze_technical(kline_df)
@@ -104,7 +260,7 @@ class StockRater:
         logger.info(f"Confidence: {confidence}")
 
         # 8. 获取当前价格
-        current_price = float(kline_df['收盘'].iloc[-1])
+        current_price = float(kline_df['close'].iloc[-1])
 
         # 9. 计算目标价和止损价
         target_price = self._calculate_target_price(current_price, overall_score, rating)
@@ -172,6 +328,9 @@ class StockRater:
         # 计算所有技术指标
         df_with_indicators = self.technical_indicators.calculate_all(kline_df)
 
+        # Ensure columns are standardized (TechnicalIndicators should do this, but double-check)
+        df_with_indicators = self._standardize_dataframe_columns(df_with_indicators, 'kline')
+
         score = 0.0
         indicators_found = 0
         total_indicators = 7  # 7个主要指标
@@ -201,9 +360,9 @@ class StockRater:
         if 'RSI' in df_with_indicators.columns:
             indicators_found += 1
             rsi = df_with_indicators['RSI'].iloc[-1]
-            if 40 <= rsi <= 70:  # 健康区间
+            if self.RSI_HEALTHY_LOW <= rsi <= self.RSI_HEALTHY_HIGH:  # 健康区间
                 score += 100.0
-            elif 30 <= rsi < 40 or 70 < rsi <= 80:
+            elif self.RSI_OVERSOLD <= rsi < self.RSI_HEALTHY_LOW or self.RSI_HEALTHY_HIGH < rsi <= self.RSI_OVERBOUGHT:
                 score += 50.0
 
         # 4. KDJ分析
@@ -211,7 +370,7 @@ class StockRater:
             indicators_found += 1
             k = df_with_indicators['K'].iloc[-1]
             d = df_with_indicators['D'].iloc[-1]
-            if k > d and k < 80:
+            if k > d and k < self.KDJ_OVERBOUGHT:
                 score += 100.0
             elif k > d:
                 score += 50.0
@@ -233,9 +392,9 @@ class StockRater:
             indicators_found += 1
             volume = df_with_indicators['volume'].iloc[-1]
             vol_ma5 = df_with_indicators['VOL_MA5'].iloc[-1]
-            if volume > vol_ma5 * 1.2:  # 放量
+            if volume > vol_ma5 * self.VOLUME_SURGE_RATIO:  # 放量
                 score += 80.0
-            elif volume > vol_ma5:
+            elif volume > vol_ma5 * self.VOLUME_NORMAL_RATIO:
                 score += 50.0
 
         # 7. ATR波动率分析
@@ -244,22 +403,22 @@ class StockRater:
             atr = df_with_indicators['ATR'].iloc[-1]
             close = df_with_indicators['close'].iloc[-1]
             atr_ratio = atr / close if close > 0 else 0
-            if atr_ratio < 0.03:  # 低波动
+            if atr_ratio < self.ATR_LOW_VOLATILITY:  # 低波动
                 score += 70.0
-            elif atr_ratio < 0.05:
+            elif atr_ratio < self.ATR_MEDIUM_VOLATILITY:
                 score += 50.0
 
         # 如果没有找到任何指标，给出一个基于价格趋势的简单分数
         if indicators_found == 0:
             logger.warning("No technical indicators found, using simple price trend analysis")
             if len(df_with_indicators) >= 5:
-                recent_close = df_with_indicators['收盘'].iloc[-5:] if '收盘' in df_with_indicators.columns else df_with_indicators['close'].iloc[-5:]
+                recent_close = df_with_indicators['close'].iloc[-5:]
                 trend = recent_close.iloc[-1] / recent_close.iloc[0] - 1
-                if trend > 0.05:
+                if trend > self.BUY_TARGET_GAIN_MIN:
                     return 75.0
                 elif trend > 0:
                     return 60.0
-                elif trend > -0.05:
+                elif trend > -self.BUY_TARGET_GAIN_MIN:
                     return 45.0
                 else:
                     return 30.0
@@ -375,9 +534,9 @@ class StockRater:
         Returns:
             评级：'buy', 'hold', 'sell'
         """
-        if overall_score >= 70:
+        if overall_score >= self.RATING_BUY_THRESHOLD:
             return 'buy'
-        elif overall_score >= 45:
+        elif overall_score >= self.RATING_HOLD_THRESHOLD:
             return 'hold'
         else:
             return 'sell'
@@ -408,37 +567,37 @@ class StockRater:
         std_dev = np.std(scores)
 
         # 标准差越小，一致性越高，信心度越高
-        consistency_factor = max(0, 1 - std_dev / 60)  # 放宽一致性要求
+        consistency_factor = max(0, 1 - std_dev / self.CONSISTENCY_DIVISOR)
 
         # 综合分数越极端（接近0或100），信心度越高
-        extremity_factor = abs(overall_score - 50) / 50
+        extremity_factor = abs(overall_score - self.SCORE_EXTREME_THRESHOLD) / self.SCORE_EXTREME_THRESHOLD
 
         # 基础信心度（根据综合分数线性映射到1-10）
-        if overall_score >= 70:
+        if overall_score >= self.RATING_BUY_THRESHOLD:
             # 70-100 映射到 7.5-10
-            base_confidence = 7.5 + (overall_score - 70) / 12
-        elif overall_score >= 50:
+            base_confidence = 7.5 + (overall_score - self.RATING_BUY_THRESHOLD) / 12
+        elif overall_score >= self.SCORE_EXTREME_THRESHOLD:
             # 50-70 映射到 5-7
-            base_confidence = 5.0 + (overall_score - 50) / 10
-        elif overall_score >= 30:
+            base_confidence = 5.0 + (overall_score - self.SCORE_EXTREME_THRESHOLD) / 10
+        elif overall_score >= self.SCORE_LOW_THRESHOLD:
             # 30-50 映射到 3-5
-            base_confidence = 3.0 + (overall_score - 30) / 10
+            base_confidence = 3.0 + (overall_score - self.SCORE_LOW_THRESHOLD) / 10
         else:
             # 0-30 映射到 1-3
             base_confidence = 1.0 + overall_score / 15
 
         # 调整信心度（一致性和极端性都会增加信心度）
         # 对于高分，更多依赖综合分数，减少一致性影响
-        if overall_score >= 70:
+        if overall_score >= self.RATING_BUY_THRESHOLD:
             confidence = base_confidence * (0.7 + 0.3 * consistency_factor) * (0.8 + 0.2 * extremity_factor)
         else:
             confidence = base_confidence * (0.6 + 0.4 * consistency_factor) * (0.7 + 0.3 * extremity_factor)
 
         # 对于高分和低分，给予额外加成
-        if overall_score >= 80:
-            confidence = min(confidence * 1.15, 10.0)
-        elif overall_score <= 30:
-            confidence = min(confidence * 1.1, 10.0)
+        if overall_score >= self.SCORE_HIGH_THRESHOLD:
+            confidence = min(confidence * self.CONFIDENCE_HIGH_MULTIPLIER, 10.0)
+        elif overall_score <= self.SCORE_LOW_THRESHOLD:
+            confidence = min(confidence * self.CONFIDENCE_LOW_MULTIPLIER, 10.0)
 
         # 限制在1-10范围内
         return max(1.0, min(10.0, round(confidence, 1)))
@@ -457,15 +616,15 @@ class StockRater:
         """
         if rating == 'buy':
             # 根据分数计算涨幅（5%-25%）
-            gain_ratio = 0.05 + (overall_score - 70) / 100 * 0.20
+            gain_ratio = self.BUY_TARGET_GAIN_MIN + (overall_score - self.RATING_BUY_THRESHOLD) / 100 * self.BUY_TARGET_GAIN_MAX
             return current_price * (1 + gain_ratio)
         elif rating == 'sell':
             # 根据分数计算跌幅（5%-20%）
-            loss_ratio = 0.05 + (45 - overall_score) / 100 * 0.15
+            loss_ratio = self.SELL_LOSS_MIN + (self.RATING_HOLD_THRESHOLD - overall_score) / 100 * self.SELL_LOSS_MAX
             return current_price * (1 - loss_ratio)
         else:  # hold
             # 持有时目标价接近当前价，略有上涨
-            return current_price * 1.03
+            return current_price * (1 + self.HOLD_TARGET_GAIN)
 
     def _calculate_stop_loss(self, current_price: float, overall_score: float, rating: str) -> float:
         """
@@ -481,14 +640,14 @@ class StockRater:
         """
         if rating == 'buy':
             # 买入止损为-5%到-10%
-            stop_loss_ratio = 0.05 + (100 - overall_score) / 100 * 0.05
+            stop_loss_ratio = self.STOP_LOSS_BUY_MIN + (100 - overall_score) / 100 * self.STOP_LOSS_BUY_MAX
             return current_price * (1 - stop_loss_ratio)
         elif rating == 'sell':
             # 卖出时止损即为当前价（建议立即卖出）
-            return current_price * 0.98
+            return current_price * (1 - self.STOP_LOSS_SELL)
         else:  # hold
             # 持有止损为-7%
-            return current_price * 0.93
+            return current_price * (1 - self.STOP_LOSS_HOLD)
 
     def _generate_reasons(
         self,
@@ -514,28 +673,28 @@ class StockRater:
         reasons = []
 
         if rating == 'buy':
-            if technical_score >= 70:
+            if technical_score >= self.RATING_BUY_THRESHOLD:
                 reasons.append('技术面呈现强势上涨趋势')
-            if fundamental_score >= 70:
+            if fundamental_score >= self.RATING_BUY_THRESHOLD:
                 reasons.append('基本面良好，财务指标健康')
-            if capital_score >= 70:
+            if capital_score >= self.RATING_BUY_THRESHOLD:
                 reasons.append('主力资金持续流入，市场情绪积极')
             if capital_signal == '买入':
                 reasons.append('资金流向信号显示买入机会')
         elif rating == 'sell':
-            if technical_score < 45:
+            if technical_score < self.RATING_HOLD_THRESHOLD:
                 reasons.append('技术面走弱，下跌趋势明显')
-            if fundamental_score < 45:
+            if fundamental_score < self.RATING_HOLD_THRESHOLD:
                 reasons.append('基本面欠佳，财务风险较高')
-            if capital_score < 45:
+            if capital_score < self.RATING_HOLD_THRESHOLD:
                 reasons.append('主力资金流出，市场情绪悲观')
             if capital_signal == '卖出':
                 reasons.append('资金流向信号显示卖出风险')
         else:  # hold
             reasons.append('综合指标显示震荡整理，建议观望')
-            if 50 <= technical_score < 70:
+            if self.SCORE_EXTREME_THRESHOLD <= technical_score < self.RATING_BUY_THRESHOLD:
                 reasons.append('技术面处于平衡状态')
-            if 50 <= fundamental_score < 70:
+            if self.SCORE_EXTREME_THRESHOLD <= fundamental_score < self.RATING_BUY_THRESHOLD:
                 reasons.append('基本面稳定，但缺乏亮点')
 
         if not reasons:
@@ -558,7 +717,7 @@ class StockRater:
 
         if rating == 'buy':
             risks.append('市场整体波动可能影响个股表现')
-            if overall_score < 80:
+            if overall_score < self.SCORE_HIGH_THRESHOLD:
                 risks.append('部分指标存在分歧，需密切关注')
         elif rating == 'sell':
             risks.append('继续持有可能面临进一步下跌风险')
@@ -590,11 +749,11 @@ class StockRater:
         risks.append('T+1交易制度限制，当日买入次日才能卖出')
 
         # 2. 涨跌停风险
-        current_price = float(kline_df['收盘'].iloc[-1])
-        prev_price = float(kline_df['收盘'].iloc[-2]) if len(kline_df) >= 2 else current_price
+        current_price = float(kline_df['close'].iloc[-1])
+        prev_price = float(kline_df['close'].iloc[-2]) if len(kline_df) >= 2 else current_price
         change_pct = abs((current_price - prev_price) / prev_price * 100) if prev_price > 0 else 0
 
-        if change_pct > 8:
+        if change_pct > self.PRICE_CHANGE_HIGH:
             risks.append('涨跌幅较大，需警惕涨跌停板限制')
 
         # 3. ST股票风险
@@ -699,11 +858,11 @@ class StockRater:
         Returns:
             评级文本
         """
-        if score >= 75:
+        if score >= self.SCORE_EXCELLENT:
             return '优秀'
-        elif score >= 60:
+        elif score >= self.SCORE_GOOD:
             return '良好'
-        elif score >= 40:
+        elif score >= self.SCORE_FAIR:
             return '一般'
         else:
             return '差'
