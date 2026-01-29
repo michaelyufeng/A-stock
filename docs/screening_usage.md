@@ -20,20 +20,69 @@ StockScreener（选股筛选器）是 A-stock 项目的核心组件之一，用�
 
 ### 3. 预设方案
 
-#### strong_momentum (强势动量股)
-- 重点关注技术面和资金面
-- 权重配置: 技术60% + 资金20% + 基本面20%
-- 适合短期交易
+系统提供8种预设筛选策略，涵盖不同投资风格和市场环境：
 
-#### value_growth (价值成长股)
-- 重点关注基本面
-- 权重配置: 基本面60% + 技术30% + 资金10%
-- 适合中长期投资
+#### 原有策略（基础策略）
 
-#### capital_inflow (资金流入股)
-- 重点关注主力资金动向
-- 权重配置: 资金40% + 技术40% + 基本面20%
-- 适合捕捉热点
+##### strong_momentum (强势动量股)
+- **重点关注**: 技术面和资金面
+- **权重配置**: 技术60% + 资金20% + 基本面20%
+- **适用场景**: 短期交易
+- **风险等级**: 中高
+
+##### value_growth (价值成长股)
+- **重点关注**: 基本面
+- **权重配置**: 基本面60% + 技术30% + 资金10%
+- **适用场景**: 中长期投资
+- **风险等级**: 中
+
+##### capital_inflow (资金流入股)
+- **重点关注**: 主力资金动向
+- **权重配置**: 资金40% + 技术40% + 基本面20%
+- **适用场景**: 捕捉热点
+- **风险等级**: 中高
+
+#### 新增策略（进阶策略）
+
+##### low_pe_value (低PE价值股)
+- **筛选标准**: PE < 15, ROE > 10%
+- **权重配置**: 基本面60% + 技术30% + 资金10%
+- **适用场景**: 价值投资、中长期持有
+- **风险等级**: 低
+- **目标**: 寻找被市场低估的优质公司
+- **注意事项**: 需结合基本面深入分析，避免价值陷阱
+
+##### high_dividend (高股息率股)
+- **筛选标准**: 股息率 > 3%, 稳定分红历史
+- **权重配置**: 基本面70% + 技术20% + 资金10%
+- **适用场景**: 稳健投资、追求现金流
+- **风险等级**: 低
+- **目标**: 收益型投资标的
+- **注意事项**: 关注分红可持续性，避免股息陷阱
+
+##### breakout (突破新高股)
+- **筛选标准**: 突破20日新高，成交量放大 > 1.2倍
+- **权重配置**: 技术60% + 资金30% + 基本面10%
+- **适用场景**: 趋势跟踪、短中期交易
+- **风险等级**: 中高
+- **目标**: 动量延续机会
+- **注意事项**: 注意追高风险，必须设置止损，关注涨停板限制
+
+##### oversold_rebound (超卖反弹股)
+- **筛选标准**: RSI < 30（超卖），然后回升至30以上
+- **权重配置**: 技术70% + 基本面15% + 资金15%
+- **适用场景**: 短期交易、逆向投资
+- **风险等级**: 高
+- **目标**: 均值回归交易机会
+- **注意事项**: 快进快出，设置止损，避免抄底下跌趋势
+
+##### institutional_favorite (机构重仓股)
+- **筛选标准**: 机构持仓比例 > 30%, 持仓增加趋势
+- **权重配置**: 基本面50% + 资金30% + 技术20%
+- **适用场景**: 中长期投资、跟随聪明钱
+- **风险等级**: 中
+- **目标**: 跟随机构投资方向
+- **注意事项**: 机构数据可能有延迟，避免在高位追涨
 
 ## 快速开始
 
@@ -258,6 +307,175 @@ results = screener.screen(
 # 查看资金流入最强的股票
 top_inflow = results.nlargest(10, 'capital_score')
 print(top_inflow[['code', 'name', 'capital_score', 'current_price']])
+```
+
+### 案例4: 低PE价值投资
+
+```python
+# 寻找被低估的优质公司
+screener = StockScreener()
+
+results = screener.screen(
+    stock_pool=None,  # 全市场筛选
+    preset='low_pe_value',
+    top_n=30,
+    min_score=70,
+    parallel=True,
+    max_workers=5
+)
+
+# 进一步筛选高ROE股票
+high_roe_stocks = results[results['fundamental_score'] >= 75]
+print("低PE高ROE优质股:")
+print(high_roe_stocks[['code', 'name', 'score', 'fundamental_score', 'current_price']])
+
+# 导出结果
+results.to_csv('低PE价值股.csv', index=False, encoding='utf-8-sig')
+```
+
+### 案例5: 高股息稳健投资
+
+```python
+# 筛选高股息率的稳定分红股
+results = screener.screen(
+    stock_pool=None,
+    preset='high_dividend',
+    top_n=50,
+    min_score=65,
+    parallel=True
+)
+
+# 按股息率排序（假设fundamental_score反映分红能力）
+dividend_stocks = results.nlargest(20, 'fundamental_score')
+print("高股息稳健股TOP 20:")
+print(dividend_stocks[['code', 'name', 'score', 'fundamental_score', 'reason']])
+
+# 适合构建稳定收益组合
+```
+
+### 案例6: 突破新高趋势跟踪
+
+```python
+# 捕捉突破新高的强势股
+results = screener.screen(
+    stock_pool=None,
+    preset='breakout',
+    top_n=20,
+    min_score=70,
+    parallel=True
+)
+
+# 筛选技术面最强的突破股
+strong_breakouts = results[results['tech_score'] >= 75]
+print("强势突破股:")
+print(strong_breakouts[['code', 'name', 'tech_score', 'capital_score', 'current_price']])
+
+# 注意: 突破交易需要设置止损
+# 建议止损位: 突破点位下方3-5%
+```
+
+### 案例7: 超卖反弹短线交易
+
+```python
+# 寻找超卖后的反弹机会
+results = screener.screen(
+    stock_pool=None,
+    preset='oversold_rebound',
+    top_n=15,
+    min_score=65,
+    parallel=True
+)
+
+# 按技术评分排序
+rebound_stocks = results.nlargest(10, 'tech_score')
+print("超卖反弹机会TOP 10:")
+print(rebound_stocks[['code', 'name', 'tech_score', 'current_price', 'reason']])
+
+# 注意: 短线交易，快进快出
+# 建议持仓时间: 1-3个交易日
+# 止损: 2-3%
+```
+
+### 案例8: 机构重仓跟随策略
+
+```python
+# 跟随机构投资方向
+results = screener.screen(
+    stock_pool=None,
+    preset='institutional_favorite',
+    top_n=40,
+    min_score=70,
+    parallel=True
+)
+
+# 筛选基本面和资金面都优秀的机构重仓股
+quality_institutional = results[
+    (results['fundamental_score'] >= 70) &
+    (results['capital_score'] >= 65)
+]
+
+print("优质机构重仓股:")
+print(quality_institutional[['code', 'name', 'score', 'fundamental_score',
+                             'capital_score', 'reason']])
+
+# 适合中长期持有
+```
+
+### 案例9: 多策略组合选股
+
+```python
+# 构建多元化投资组合
+screener = StockScreener()
+
+# 策略1: 价值股30%
+value_stocks = screener.screen(
+    preset='low_pe_value',
+    top_n=10,
+    min_score=70,
+    parallel=True
+)
+
+# 策略2: 高股息股30%
+dividend_stocks = screener.screen(
+    preset='high_dividend',
+    top_n=10,
+    min_score=65,
+    parallel=True
+)
+
+# 策略3: 成长股20%
+growth_stocks = screener.screen(
+    preset='value_growth',
+    top_n=7,
+    min_score=70,
+    parallel=True
+)
+
+# 策略4: 机构重仓股20%
+institutional_stocks = screener.screen(
+    preset='institutional_favorite',
+    top_n=7,
+    min_score=68,
+    parallel=True
+)
+
+# 合并组合
+import pandas as pd
+portfolio = pd.concat([
+    value_stocks.assign(strategy='价值股'),
+    dividend_stocks.assign(strategy='高股息'),
+    growth_stocks.assign(strategy='成长股'),
+    institutional_stocks.assign(strategy='机构重仓')
+])
+
+# 去重（同一股票可能在多个策略中出现）
+portfolio = portfolio.drop_duplicates(subset=['code'], keep='first')
+
+print(f"多元化投资组合（共{len(portfolio)}只股票）:")
+print(portfolio[['code', 'name', 'strategy', 'score', 'current_price']])
+
+# 导出组合
+portfolio.to_excel('投资组合.xlsx', index=False)
 ```
 
 ## 错误处理

@@ -98,6 +98,97 @@ class TestStockScreener:
         assert 'weights' in capital_filter
         assert capital_filter['use_capital'] is True
 
+    def test_new_presets_exist(self, screener):
+        """测试新预设方案存在"""
+        # 测试所有5个新预设是否存在
+        new_presets = ['low_pe_value', 'high_dividend', 'breakout',
+                       'oversold_rebound', 'institutional_favorite']
+
+        for preset in new_presets:
+            assert preset in screener.presets, f"预设 {preset} 不存在"
+
+    def test_low_pe_value_preset(self, screener):
+        """测试低PE价值股预设"""
+        filter_config = screener.presets['low_pe_value']()
+
+        assert 'weights' in filter_config
+        assert 'use_fundamental' in filter_config
+        assert 'thresholds' in filter_config
+
+        # 低PE价值股应该重视基本面
+        assert filter_config['use_fundamental'] is True
+
+        # 验证阈值
+        thresholds = filter_config['thresholds']
+        assert 'pe_max' in thresholds
+        assert 'roe_min' in thresholds
+        assert thresholds['pe_max'] == 15.0
+        assert thresholds['roe_min'] == 10.0
+
+    def test_high_dividend_preset(self, screener):
+        """测试高股息率预设"""
+        filter_config = screener.presets['high_dividend']()
+
+        assert 'weights' in filter_config
+        assert 'use_fundamental' in filter_config
+        assert 'thresholds' in filter_config
+
+        # 高股息股应该重视基本面
+        assert filter_config['use_fundamental'] is True
+
+        # 验证阈值
+        thresholds = filter_config['thresholds']
+        assert 'dividend_yield_min' in thresholds
+        assert thresholds['dividend_yield_min'] == 3.0
+
+    def test_breakout_preset(self, screener):
+        """测试突破新高预设"""
+        filter_config = screener.presets['breakout']()
+
+        assert 'weights' in filter_config
+        assert 'use_capital' in filter_config
+        assert 'thresholds' in filter_config
+
+        # 突破股应该重视技术面和资金面
+        assert filter_config['use_capital'] is True
+
+        # 验证阈值
+        thresholds = filter_config['thresholds']
+        assert 'breakout_days' in thresholds
+        assert 'volume_ratio_min' in thresholds
+        assert thresholds['breakout_days'] in [20, 60]
+        assert thresholds['volume_ratio_min'] >= 1.2
+
+    def test_oversold_rebound_preset(self, screener):
+        """测试超卖反弹预设"""
+        filter_config = screener.presets['oversold_rebound']()
+
+        assert 'weights' in filter_config
+        assert 'thresholds' in filter_config
+
+        # 验证阈值
+        thresholds = filter_config['thresholds']
+        assert 'rsi_oversold' in thresholds
+        assert 'rsi_rebound_min' in thresholds
+        assert thresholds['rsi_oversold'] == 30.0
+        assert thresholds['rsi_rebound_min'] == 30.0
+
+    def test_institutional_favorite_preset(self, screener):
+        """测试机构重仓预设"""
+        filter_config = screener.presets['institutional_favorite']()
+
+        assert 'weights' in filter_config
+        assert 'use_fundamental' in filter_config
+        assert 'thresholds' in filter_config
+
+        # 机构股应该重视基本面
+        assert filter_config['use_fundamental'] is True
+
+        # 验证阈值
+        thresholds = filter_config['thresholds']
+        assert 'institutional_ratio_min' in thresholds
+        assert thresholds['institutional_ratio_min'] >= 30.0
+
     def test_apply_quick_filters(self, screener):
         """测试快速筛选"""
         stock_pool = ['600519', '000001', 'ST000002', '*ST000003', '600036']
@@ -487,3 +578,365 @@ class TestStockScreener:
         # （虽然具体分数取决于实现，但权重应该有影响）
         assert result1 is not None
         assert result2 is not None
+
+    # ==================== 新预设策略的集成测试 ====================
+
+    def _create_mock_kline_data(self, test_data, code):
+        """辅助函数：创建模拟K线数据"""
+        stock_data = test_data[test_data['代码'] == code]
+        if len(stock_data) == 0:
+            return pd.DataFrame()
+
+        dates = pd.date_range('2024-01-01', periods=100)
+        kline = pd.DataFrame({
+            'date': dates,
+            'close': [stock_data.iloc[0].get('close', 100.0)] * 100,
+            'volume': [stock_data.iloc[0].get('volume', 1000000)] * 100,
+            'RSI': [50] * 100,
+            'MACD': [0.1] * 100,
+            'MACD_signal': [0.0] * 100,
+            'MA20': [stock_data.iloc[0].get('close', 100.0)] * 100,
+            'VOL_MA5': [stock_data.iloc[0].get('volume', 1000000)] * 100
+        })
+
+        # 添加额外字段
+        for col in ['PE', 'ROE', '股息率', '机构持仓比例']:
+            if col in stock_data.columns:
+                kline[col] = stock_data.iloc[0][col]
+
+        return kline
+
+    def _setup_screener_mocks(self, screener, test_data):
+        """辅助函数：设置screener的mock"""
+        screener.data_provider.get_daily_kline = Mock(
+            side_effect=lambda code, **kwargs: self._create_mock_kline_data(test_data, code)
+        )
+        screener.data_provider.get_realtime_quote = Mock(
+            side_effect=lambda code: self._create_mock_quote(test_data, code)
+        )
+        screener.data_provider.get_financial_data = Mock(return_value=pd.DataFrame())
+        screener.data_provider.get_money_flow = Mock(return_value=pd.DataFrame())
+        screener.tech_indicators.calculate_all = Mock(side_effect=lambda x: x)
+
+    def _create_mock_quote(self, test_data, code):
+        """辅助函数：创建模拟行情数据"""
+        stock_data = test_data[test_data['代码'] == code]
+        if len(stock_data) == 0:
+            return {'名称': '测试股票'}
+
+        quote = {'名称': stock_data.iloc[0].get('名称', '测试股票')}
+        for col in ['PE', 'ROE', '股息率', '机构持仓比例']:
+            if col in stock_data.columns:
+                quote[col] = stock_data.iloc[0][col]
+        return quote
+
+    def test_low_pe_value_filters_correctly(self, screener):
+        """测试低PE价值股实际应用过滤逻辑"""
+        # 创建测试数据：3只股票，只有1只满足PE<15且ROE>10%
+        test_data = pd.DataFrame({
+            '代码': ['000001', '000002', '000003'],
+            '名称': ['股票A', '股票B', '股票C'],
+            'PE': [12.0, 18.0, 10.0],  # 000002 PE=18不满足
+            'ROE': [15.0, 12.0, 8.0],  # 000003 ROE=8不满足
+            'close': [10.0, 20.0, 15.0],
+            'volume': [1000000, 1000000, 1000000]
+        })
+
+        self._setup_screener_mocks(screener, test_data)
+
+        # 使用low_pe_value预设筛选
+        results = screener.screen(
+            stock_pool=['000001', '000002', '000003'],
+            preset='low_pe_value',
+            top_n=10,
+            min_score=0,
+            parallel=False
+        )
+
+        # 只有000001应该通过过滤（PE=12<15 且 ROE=15>10）
+        assert len(results) == 1
+        assert results.iloc[0]['code'] == '000001'
+
+    def test_high_dividend_filters_correctly(self, screener):
+        """测试高股息率实际应用过滤逻辑"""
+        # 创建测试数据：3只股票，只有2只满足股息率>=3%
+        test_data = pd.DataFrame({
+            '代码': ['000001', '000002', '000003'],
+            '名称': ['高股息A', '低股息B', '高股息C'],
+            'close': [10.0, 20.0, 15.0],
+            '股息率': [4.5, 2.0, 3.5]  # 000002股息率=2%不满足
+        })
+
+        self._setup_screener_mocks(screener, test_data)
+
+        results = screener.screen(
+            stock_pool=['000001', '000002', '000003'],
+            preset='high_dividend',
+            top_n=10,
+            min_score=0,
+            parallel=False
+        )
+
+        # 只有000001和000003应该通过过滤
+        assert len(results) == 2
+        assert '000001' in results['code'].values
+        assert '000003' in results['code'].values
+        assert '000002' not in results['code'].values
+
+    def test_breakout_filters_correctly(self, screener):
+        """测试突破新高实际应用过滤逻辑"""
+        # 创建2只股票：一只突破新高+放量，一只未突破
+        test_codes = ['000001', '000002']
+
+        def mock_get_kline(code, **kwargs):
+            dates = pd.date_range('2024-01-01', periods=100)
+
+            if code == '000001':
+                # 突破股票：价格持续上涨，最后突破20日新高，且放量
+                prices = list(range(90, 190))
+                # 成交量：前99天正常，最后一天放量到1.5倍
+                volumes = [1000000] * 99 + [1500000]
+            else:
+                # 非突破股票：价格横盘
+                prices = [100] * 100
+                volumes = [1000000] * 100
+
+            kline = pd.DataFrame({
+                'date': dates,
+                'close': prices,
+                'high': [p + 2 for p in prices],
+                'volume': volumes,
+                'RSI': [55] * 100,
+                'MACD': [0.5] * 100,
+                'MACD_signal': [0.3] * 100,
+                'MA20': [100] * 100,
+                'VOL_MA5': [1000000] * 100
+            })
+            return kline
+
+        def mock_get_quote(code):
+            return {'名称': f'股票{code}'}
+
+        screener.data_provider.get_daily_kline = Mock(side_effect=mock_get_kline)
+        screener.data_provider.get_realtime_quote = Mock(side_effect=mock_get_quote)
+        screener.data_provider.get_money_flow = Mock(return_value=pd.DataFrame())
+        screener.tech_indicators.calculate_all = Mock(side_effect=lambda x: x)
+
+        results = screener.screen(
+            stock_pool=test_codes,
+            preset='breakout',
+            top_n=10,
+            min_score=0,
+            parallel=False
+        )
+
+        # 只有000001应该通过（突破+放量）
+        assert len(results) == 1
+        assert results.iloc[0]['code'] == '000001'
+
+    def test_oversold_rebound_filters_correctly(self, screener):
+        """测试超卖反弹实际应用过滤逻辑"""
+        # 创建2只股票：一只有超卖反弹信号，一只没有
+        test_codes = ['000001', '000002']
+
+        def mock_get_kline(code, **kwargs):
+            dates = pd.date_range('2024-01-01', periods=100)
+
+            if code == '000001':
+                # 超卖反弹股票：前期RSI<30，后期RSI>30
+                rsi_values = [50] * 40 + [25] * 40 + [35] * 20
+            else:
+                # 非超卖反弹股票：RSI一直正常
+                rsi_values = [50] * 100
+
+            kline = pd.DataFrame({
+                'date': dates,
+                'close': [100] * 100,
+                'volume': [1000000] * 100,
+                'RSI': rsi_values,
+                'MACD': [0.1] * 100,
+                'MACD_signal': [0.0] * 100,
+                'MA20': [100] * 100,
+                'VOL_MA5': [1000000] * 100
+            })
+            return kline
+
+        def mock_get_quote(code):
+            return {'名称': f'股票{code}'}
+
+        screener.data_provider.get_daily_kline = Mock(side_effect=mock_get_kline)
+        screener.data_provider.get_realtime_quote = Mock(side_effect=mock_get_quote)
+        screener.tech_indicators.calculate_all = Mock(side_effect=lambda x: x)
+
+        results = screener.screen(
+            stock_pool=test_codes,
+            preset='oversold_rebound',
+            top_n=10,
+            min_score=0,
+            parallel=False
+        )
+
+        # 只有000001应该通过（有超卖反弹信号）
+        assert len(results) == 1
+        assert results.iloc[0]['code'] == '000001'
+
+    def test_institutional_favorite_filters_correctly(self, screener):
+        """测试机构重仓实际应用过滤逻辑"""
+        # 创建测试数据：3只股票，只有2只满足机构持仓>=30%
+        test_data = pd.DataFrame({
+            '代码': ['000001', '000002', '000003'],
+            '名称': ['机构重仓A', '散户为主B', '机构重仓C'],
+            '机构持仓比例': [35.0, 20.0, 40.0],  # 000002不满足
+            'close': [100.0, 100.0, 100.0]
+        })
+
+        self._setup_screener_mocks(screener, test_data)
+
+        results = screener.screen(
+            stock_pool=['000001', '000002', '000003'],
+            preset='institutional_favorite',
+            top_n=10,
+            min_score=0,
+            parallel=False
+        )
+
+        # 只有000001和000003应该通过过滤
+        assert len(results) == 2
+        assert '000001' in results['code'].values
+        assert '000003' in results['code'].values
+        assert '000002' not in results['code'].values
+
+    def test_low_pe_value_screening(self, screener, sample_kline_df):
+        """测试低PE价值股筛选"""
+        # 创建包含PE和ROE数据的DataFrame
+        sample_financial_df = pd.DataFrame({
+            '净资产收益率': [12.5],
+            '毛利率': [85.0],
+            '净利润': [50000000000],
+            '营业收入': [120000000000]
+        })
+
+        screener.data_provider.get_daily_kline = Mock(return_value=sample_kline_df)
+        screener.data_provider.get_financial_data = Mock(return_value=sample_financial_df)
+        screener.data_provider.get_realtime_quote = Mock(return_value={'名称': '测试低PE股票'})
+        screener.tech_indicators.calculate_all = Mock(return_value=sample_kline_df)
+        screener.financial_metrics.get_overall_score = Mock(return_value=75.0)
+
+        results = screener.screen(
+            stock_pool=['600519'],
+            preset='low_pe_value',
+            top_n=5,
+            min_score=0,
+            parallel=False
+        )
+
+        assert isinstance(results, pd.DataFrame)
+
+    def test_high_dividend_screening(self, screener, sample_kline_df):
+        """测试高股息率筛选"""
+        screener.data_provider.get_daily_kline = Mock(return_value=sample_kline_df)
+        screener.data_provider.get_realtime_quote = Mock(return_value={'名称': '测试高股息股票'})
+        screener.tech_indicators.calculate_all = Mock(return_value=sample_kline_df)
+
+        results = screener.screen(
+            stock_pool=['600519'],
+            preset='high_dividend',
+            top_n=5,
+            min_score=0,
+            parallel=False
+        )
+
+        assert isinstance(results, pd.DataFrame)
+
+    def test_breakout_screening(self, screener):
+        """测试突破新高筛选"""
+        # 创建突破新高的数据
+        dates = pd.date_range('2024-01-01', periods=100)
+        prices = list(range(90, 150)) + list(range(150, 190))  # 持续上涨，突破前高
+        df = pd.DataFrame({
+            'date': dates,
+            'open': prices,
+            'high': [p + 2 for p in prices],
+            'low': [p - 2 for p in prices],
+            'close': prices,
+            'volume': [1000000 * (1 + i * 0.01) for i in range(100)]  # 放量
+        })
+        df['RSI'] = 55
+        df['MACD'] = 0.5
+        df['MACD_signal'] = 0.3
+        df['MA20'] = df['close'].rolling(20).mean()
+        df['VOL_MA5'] = df['volume'].rolling(5).mean()
+
+        screener.data_provider.get_daily_kline = Mock(return_value=df)
+        screener.data_provider.get_realtime_quote = Mock(return_value={'名称': '测试突破股票'})
+        screener.tech_indicators.calculate_all = Mock(return_value=df)
+
+        results = screener.screen(
+            stock_pool=['600519'],
+            preset='breakout',
+            top_n=5,
+            min_score=0,
+            parallel=False
+        )
+
+        assert isinstance(results, pd.DataFrame)
+
+    def test_oversold_rebound_screening(self, screener):
+        """测试超卖反弹筛选"""
+        # 创建超卖反弹的数据
+        dates = pd.date_range('2024-01-01', periods=100)
+        df = pd.DataFrame({
+            'date': dates,
+            'open': [100] * 100,
+            'high': [102] * 100,
+            'low': [98] * 100,
+            'close': [100] * 100,
+            'volume': [1000000] * 100
+        })
+
+        # 前期超卖（RSI < 30），后期反弹（RSI > 30）
+        rsi_values = [25] * 50 + [35] * 50
+        df['RSI'] = rsi_values
+        df['MACD'] = 0.1
+        df['MACD_signal'] = 0.0
+        df['MA20'] = df['close'].rolling(20).mean()
+        df['VOL_MA5'] = df['volume'].rolling(5).mean()
+
+        screener.data_provider.get_daily_kline = Mock(return_value=df)
+        screener.data_provider.get_realtime_quote = Mock(return_value={'名称': '测试超卖反弹股票'})
+        screener.tech_indicators.calculate_all = Mock(return_value=df)
+
+        results = screener.screen(
+            stock_pool=['600519'],
+            preset='oversold_rebound',
+            top_n=5,
+            min_score=0,
+            parallel=False
+        )
+
+        assert isinstance(results, pd.DataFrame)
+
+    def test_institutional_favorite_screening(self, screener, sample_kline_df):
+        """测试机构重仓筛选"""
+        sample_financial_df = pd.DataFrame({
+            '净资产收益率': [15.5],
+            '毛利率': [90.5],
+            '净利润': [50000000000],
+            '营业收入': [120000000000]
+        })
+
+        screener.data_provider.get_daily_kline = Mock(return_value=sample_kline_df)
+        screener.data_provider.get_financial_data = Mock(return_value=sample_financial_df)
+        screener.data_provider.get_realtime_quote = Mock(return_value={'名称': '测试机构重仓股票'})
+        screener.tech_indicators.calculate_all = Mock(return_value=sample_kline_df)
+        screener.financial_metrics.get_overall_score = Mock(return_value=75.0)
+
+        results = screener.screen(
+            stock_pool=['600519'],
+            preset='institutional_favorite',
+            top_n=5,
+            min_score=0,
+            parallel=False
+        )
+
+        assert isinstance(results, pd.DataFrame)

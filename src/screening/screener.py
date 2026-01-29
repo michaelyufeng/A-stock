@@ -9,8 +9,30 @@ from src.data.akshare_provider import AKShareProvider
 from src.analysis.technical.indicators import TechnicalIndicators
 from src.analysis.fundamental.financial_metrics import FinancialMetrics
 from src.analysis.capital.money_flow import MoneyFlowAnalyzer
+from src.screening.filters import apply_filters
 
 logger = get_logger(__name__)
+
+# ==================== 筛选策略常量 ====================
+
+# 低PE价值股策略阈值
+LOW_PE_MAX = 15.0  # PE最大值
+LOW_PE_ROE_MIN = 10.0  # ROE最小值（%）
+
+# 高股息率策略阈值
+HIGH_DIVIDEND_YIELD_MIN = 3.0  # 股息率最小值（%）
+
+# 突破新高策略阈值
+BREAKOUT_DAYS_20 = 20  # 20日新高
+BREAKOUT_DAYS_60 = 60  # 60日新高
+BREAKOUT_VOLUME_RATIO_MIN = 1.2  # 成交量放大倍数
+
+# 超卖反弹策略阈值
+OVERSOLD_RSI_THRESHOLD = 30.0  # RSI超卖阈值
+REBOUND_RSI_MIN = 30.0  # 反弹RSI最小值
+
+# 机构重仓策略阈值
+INSTITUTIONAL_RATIO_MIN = 30.0  # 机构持仓比例最小值（%）
 
 
 class StockScreener:
@@ -28,7 +50,12 @@ class StockScreener:
         self.presets = {
             'strong_momentum': self._strong_momentum_filter,
             'value_growth': self._value_growth_filter,
-            'capital_inflow': self._capital_inflow_filter
+            'capital_inflow': self._capital_inflow_filter,
+            'low_pe_value': self._low_pe_value_filter,
+            'high_dividend': self._high_dividend_filter,
+            'breakout': self._breakout_filter,
+            'oversold_rebound': self._oversold_rebound_filter,
+            'institutional_favorite': self._institutional_favorite_filter
         }
 
         logger.info("StockScreener initialized")
@@ -236,6 +263,34 @@ class StockScreener:
             # 计算技术指标
             kline_df = self.tech_indicators.calculate_all(kline_df)
 
+            # 获取实时行情（包含PE、PB等基本面数据）
+            try:
+                quote = self.data_provider.get_realtime_quote(code)
+
+                # 验证quote数据有效性
+                if not quote or not isinstance(quote, dict):
+                    logger.warning(f"无效的实时行情数据: {code}")
+                else:
+                    # 将基本面数据添加到K线数据中
+                    if 'PE' in quote or '市盈率-动态' in quote:
+                        kline_df['PE'] = quote.get('PE', quote.get('市盈率-动态', float('nan')))
+                    if 'ROE' in quote or '净资产收益率' in quote:
+                        kline_df['ROE'] = quote.get('ROE', quote.get('净资产收益率', float('nan')))
+                    if '股息率' in quote:
+                        kline_df['股息率'] = quote.get('股息率', float('nan'))
+                    if '机构持仓比例' in quote:
+                        kline_df['机构持仓比例'] = quote.get('机构持仓比例', float('nan'))
+            except Exception as e:
+                logger.debug(f"Failed to get quote data for {code}: {e}")
+
+            # 应用预设策略的过滤逻辑
+            if 'thresholds' in filters:
+                kline_df = apply_filters(kline_df, filters['thresholds'])
+                # 如果被过滤掉，返回None
+                if len(kline_df) == 0:
+                    logger.debug(f"Stock {code} filtered out by preset thresholds")
+                    return None
+
             # 技术面评分
             tech_score = self._score_technical(kline_df, filters)
 
@@ -282,7 +337,10 @@ class StockScreener:
             # 获取股票名称
             try:
                 quote = self.data_provider.get_realtime_quote(code)
-                name = quote.get('名称', code)
+                if quote and isinstance(quote, dict):
+                    name = quote.get('名称', code)
+                else:
+                    name = code
             except Exception as e:
                 logger.debug(f"Failed to get quote for {code}: {e}")
                 name = code
@@ -427,5 +485,196 @@ class StockScreener:
                 'technical': 0.4,
                 'fundamental': 0.2,
                 'capital': 0.4
+            }
+        }
+
+    # ==================== 新增预设筛选方案 ====================
+
+    def _low_pe_value_filter(self) -> Dict[str, Any]:
+        """
+        低PE价值股筛选方案
+
+        筛选标准：
+        - PE ratio < 15
+        - ROE > 10%
+        - 目标：寻找被低估的优质公司
+
+        适用场景：
+        - 价值投资者
+        - 中长期投资
+        - 寻找低估值蓝筹股
+
+        Returns:
+            筛选条件字典，包含：
+            - use_fundamental: 是否使用基本面分析（True）
+            - use_capital: 是否使用资金面分析（False）
+            - weights: 各维度权重（基本面60%，技术面30%，资金面10%）
+            - thresholds: 具体筛选阈值
+        """
+        return {
+            'use_fundamental': True,
+            'use_capital': False,
+            'weights': {
+                'technical': 0.3,
+                'fundamental': 0.6,
+                'capital': 0.1
+            },
+            'thresholds': {
+                'pe_max': LOW_PE_MAX,
+                'roe_min': LOW_PE_ROE_MIN
+            }
+        }
+
+    def _high_dividend_filter(self) -> Dict[str, Any]:
+        """
+        高股息率股筛选方案
+
+        筛选标准：
+        - 股息率 > 3%
+        - 稳定的分红历史
+        - 目标：收益型投资标的
+
+        适用场景：
+        - 追求稳定现金流
+        - 低风险偏好投资者
+        - 长期持有策略
+
+        Returns:
+            筛选条件字典，包含：
+            - use_fundamental: 是否使用基本面分析（True）
+            - use_capital: 是否使用资金面分析（False）
+            - weights: 各维度权重（基本面70%，技术面20%，资金面10%）
+            - thresholds: 具体筛选阈值
+        """
+        return {
+            'use_fundamental': True,
+            'use_capital': False,
+            'weights': {
+                'technical': 0.2,
+                'fundamental': 0.7,
+                'capital': 0.1
+            },
+            'thresholds': {
+                'dividend_yield_min': HIGH_DIVIDEND_YIELD_MIN
+            }
+        }
+
+    def _breakout_filter(self) -> Dict[str, Any]:
+        """
+        突破新高股筛选方案
+
+        筛选标准：
+        - 价格突破20日或60日新高
+        - 成交量放大确认（> 1.2倍均量）
+        - 目标：动量延续机会
+
+        适用场景：
+        - 趋势跟踪策略
+        - 短中期交易
+        - 追涨强势股
+
+        注意事项：
+        - 需要设置止损
+        - 注意追高风险
+        - 关注涨停板限制（A股特色）
+
+        Returns:
+            筛选条件字典，包含：
+            - use_fundamental: 是否使用基本面分析（False）
+            - use_capital: 是否使用资金面分析（True）
+            - weights: 各维度权重（技术面60%，资金面30%，基本面10%）
+            - thresholds: 具体筛选阈值
+        """
+        return {
+            'use_fundamental': False,
+            'use_capital': True,
+            'weights': {
+                'technical': 0.6,
+                'fundamental': 0.1,
+                'capital': 0.3
+            },
+            'thresholds': {
+                'breakout_days': BREAKOUT_DAYS_20,  # 默认使用20日新高
+                'volume_ratio_min': BREAKOUT_VOLUME_RATIO_MIN
+            }
+        }
+
+    def _oversold_rebound_filter(self) -> Dict[str, Any]:
+        """
+        超卖反弹股筛选方案
+
+        筛选标准：
+        - RSI < 30（超卖）
+        - 随后RSI回升至30以上（反弹信号）
+        - 目标：均值回归交易机会
+
+        适用场景：
+        - 短期交易
+        - 逆向投资策略
+        - 超跌反弹机会
+
+        注意事项：
+        - 需要快进快出
+        - 设置止损位
+        - 避免抄底下跌趋势中的股票
+        - 结合其他指标确认反转
+
+        Returns:
+            筛选条件字典，包含：
+            - use_fundamental: 是否使用基本面分析（False）
+            - use_capital: 是否使用资金面分析（False）
+            - weights: 各维度权重（技术面70%，基本面15%，资金面15%）
+            - thresholds: 具体筛选阈值
+        """
+        return {
+            'use_fundamental': False,
+            'use_capital': False,
+            'weights': {
+                'technical': 0.7,
+                'fundamental': 0.15,
+                'capital': 0.15
+            },
+            'thresholds': {
+                'rsi_oversold': OVERSOLD_RSI_THRESHOLD,
+                'rsi_rebound_min': REBOUND_RSI_MIN
+            }
+        }
+
+    def _institutional_favorite_filter(self) -> Dict[str, Any]:
+        """
+        机构重仓股筛选方案
+
+        筛选标准：
+        - 机构持仓比例 > 30%
+        - 机构持仓呈增加趋势
+        - 目标：跟随聪明钱
+
+        适用场景：
+        - 中长期投资
+        - 跟随机构策略
+        - 寻找高质量标的
+
+        注意事项：
+        - 机构数据可能有延迟
+        - 需要结合基本面分析
+        - 避免在机构高位减仓时追涨
+
+        Returns:
+            筛选条件字典，包含：
+            - use_fundamental: 是否使用基本面分析（True）
+            - use_capital: 是否使用资金面分析（True）
+            - weights: 各维度权重（基本面50%，技术面20%，资金面30%）
+            - thresholds: 具体筛选阈值
+        """
+        return {
+            'use_fundamental': True,
+            'use_capital': True,
+            'weights': {
+                'technical': 0.2,
+                'fundamental': 0.5,
+                'capital': 0.3
+            },
+            'thresholds': {
+                'institutional_ratio_min': INSTITUTIONAL_RATIO_MIN
             }
         }
