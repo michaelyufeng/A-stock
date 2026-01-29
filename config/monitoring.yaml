@@ -1,0 +1,78 @@
+# 监控服务配置文件
+
+monitoring:
+  # 更新频率（秒）
+  update_interval: 60
+
+  # 监控列表
+  watchlist:
+    - code: "600519"
+      name: "贵州茅台"
+    - code: "000858"
+      name: "五粮液"
+    - code: "000001"
+      name: "平安银行"
+    - code: "600036"
+      name: "招商银行"
+
+  # 信号检测配置
+  signals:
+    # 启用的检测器
+    enabled_detectors:
+      - ma_crossover      # MA均线交叉
+      - rsi               # RSI超买超卖
+      - volume_breakout   # 成交量突破
+      - stop_loss         # 止损触发
+      - take_profit       # 止盈触发
+
+    # 技术指标参数
+    ma_short: 5           # 短期均线
+    ma_long: 20           # 长期均线
+    rsi_period: 14        # RSI周期
+    rsi_oversold: 30      # RSI超卖阈值
+    rsi_overbought: 70    # RSI超买阈值
+    volume_multiplier: 2.0  # 成交量倍数
+
+  # 提醒设置
+  alerts:
+    # 最低优先级（只提醒此级别及以上的信号）
+    # 可选值: low, medium, high, critical
+    min_priority: "medium"
+
+    # 通知渠道
+    channels:
+      - console  # 控制台
+      - log      # 日志文件
+
+    # 去重窗口（秒）- 同一股票同一信号在此窗口内不重复提醒
+    dedup_window: 900  # 15分钟
+
+    # 交易时间限制
+    trading_hours_only: false  # 是否仅在交易时间提醒
+
+  # 持仓监控
+  position_monitoring:
+    enabled: true            # 是否启用持仓监控
+    check_interval: 300      # 检查间隔（秒）- 5分钟
+
+# 风险管理配置
+risk:
+  # 总资金
+  total_capital: 1000000
+
+  # 仓位限制
+  position:
+    max_single_position: 0.20    # 单一持仓≤20%
+    max_sector_exposure: 0.30    # 单一行业≤30%
+    max_total_position: 0.95     # 总仓位≤95%
+
+  # 止损止盈
+  stop_loss:
+    method: "fixed"        # fixed, trailing, atr
+    fixed_ratio: 0.08      # 固定止损8%
+    trailing_ratio: 0.05   # 移动止损5%
+    atr_multiplier: 2.0    # ATR倍数
+
+  take_profit:
+    method: "fixed"        # fixed, dynamic
+    fixed_ratio: 0.15      # 固定止盈15%
