@@ -48,11 +48,13 @@ class CacheManager:
 
         try:
             value = self._cache.get(key, default=default)
-            if value != default:
+            # 使用 is 判断是否为默认值，避免 DataFrame 比较问题
+            if value is not default:
                 logger.debug(f"Cache hit: {key}")
+                return value
             else:
                 logger.debug(f"Cache miss: {key}")
-            return value
+                return default
         except Exception as e:
             logger.error(f"Cache get error for key {key}: {e}")
             return default
