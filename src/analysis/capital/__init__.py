@@ -1,0 +1,1 @@
+"""Capital analysis module."""
